@@ -23,6 +23,7 @@ environment:
 dependencies:
   table_calendar: ^2.3.1
   date_format: ^1.0.9
+  intl: ^0.15.7
   flutter:
     sdk: flutter
 
