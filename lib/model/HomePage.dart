@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:salary_recorder/model/Database.dart';
+import 'package:sqflite/sqflite.dart';
 import 'package:table_calendar/table_calendar.dart';
-// import 'package:date_format/date_format.dart';
 
 class MyHomePage extends StatefulWidget {
   MyHomePage({Key key, this.title}) : super(key: key);
@@ -13,11 +14,16 @@ class MyHomePage extends StatefulWidget {
 }
 
 class _MyHomePageState extends State<MyHomePage> {
+  Database db;
   double _height;
   double _width;
 
-  double _payRate = 0.00;
+  double _payRate = 5.50;
   String _currency = '\$';
+  // Map _userDetail = {
+  //   'pay_rate': 0.00,
+  //   'currency': r'$',
+  // };
 
   Map<DateTime, List> _events;
   List _selectedEvents;
@@ -41,15 +47,13 @@ class _MyHomePageState extends State<MyHomePage> {
   @override
   void initState() {
     super.initState();
-    final _selectedDay = DateTime.now();
 
     // load previous data
-    _events = {
-      // _selectedDay.subtract(Duration(days: 0)): [],
-      // _selectedDay.add(Duration(days: 0)): [],
-    };
+    _events = {};
+    _currentSelectedDay = DateTime.parse(DateTime.now().toString().split(" ")[0]+" 12:00:00.000Z");
+    _getEvents();
 
-    _selectedEvents = _events[_selectedDay] ?? [];
+    _selectedEvents = [];
     _calendarController = CalendarController();
     // _currentSelectedDay = _selectedDay;
 
@@ -60,6 +64,7 @@ class _MyHomePageState extends State<MyHomePage> {
   @override
   void dispose() {
     _calendarController.dispose();
+    db.close();
     super.dispose();
   }
 
@@ -73,8 +78,7 @@ class _MyHomePageState extends State<MyHomePage> {
       _selectedEvents = events;
       _currentSelectedDay = day;
     });
-    print('CALLBACK: _onDaySelected KEY:'+_currentSelectedDay.toString());
-    print(_getWeek(_currentSelectedDay));
+    print('CALLBACK: _onDaySelected KEY:' + _currentSelectedDay.toString());
   }
 
   Future<Null> _selectStartTime(BuildContext context) async {
@@ -125,39 +129,38 @@ class _MyHomePageState extends State<MyHomePage> {
     _timeDiffHour = _timeDiff.truncate();
     _timeDiffMinute = ((_timeDiff - _timeDiff.truncate()) * 60).truncate();
 
-    print(
-        'Here your Happy $_timeDiffHour Hour and also $_timeDiffMinute min');
     return _timeDiff;
   }
 
-  double _calculateWages(DateTime day){
-    if(!_events.containsKey(day)){
+  double _calculateWages(DateTime day) {
+    if (!_events.containsKey(day)) {
       return 0.0;
     }
     double wage = 0.0;
     _events[day].forEach((element) {
-      wage += element[0]*_payRate;
+      wage += element[0] * _payRate;
     });
     return wage;
   }
 
-  List<DateTime> _getWeek(DateTime date){
+  List<DateTime> _getWeek(DateTime date) {
+    date = date != null ? date : DateTime.now();
     int day = date.weekday;
     List<DateTime> allDays = [];
-    switch(day){
+    switch (day) {
       case 7:
-        for(int i = 0; i<7; i++){
+        for (int i = 0; i < 7; i++) {
           allDays += [date.add(Duration(days: i))];
         }
         break;
       case 6:
-        for(int i = 0; i<7; i++){
+        for (int i = 0; i < 7; i++) {
           allDays += [date.subtract(Duration(days: i))];
         }
         break;
       default:
-        DateTime sunday = date.subtract(Duration(days:day));
-        for(int i = 0; i<7; i++){
+        DateTime sunday = date.subtract(Duration(days: day));
+        for (int i = 0; i < 7; i++) {
           allDays += [sunday.add(Duration(days: i))];
         }
         break;
@@ -165,7 +168,7 @@ class _MyHomePageState extends State<MyHomePage> {
     return allDays;
   }
 
-  double _getWeeklySalary(DateTime date){
+  double _getWeeklySalary(DateTime date) {
     final daysInWeek = _getWeek(date);
     double weeklySalary = 0.0;
     daysInWeek.forEach((day) {
@@ -175,7 +178,8 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   void _onAddButtonPressed() {
-    print("CALLBACK: _onAddButtonPressed() KEY:"+_currentSelectedDay.toString());
+    print("CALLBACK: _onAddButtonPressed() KEY:" +
+        _currentSelectedDay.toString());
     _startTimeController.text = '';
     _endTimeController.text = '';
     showDialog(
@@ -268,15 +272,9 @@ class _MyHomePageState extends State<MyHomePage> {
                   child: RaisedButton(
                     child: Text("Confirm"),
                     onPressed: () {
-                      //todo
                       _timeDiff =
                           _calculateTimeDifference(_startTime, _endTime);
-                      if (_timeDiff <= 0) {
-                        setState(() {
-                          _showInvalidTime = true;
-                        });
-                        print(_showInvalidTime);
-                      } else {
+                      if (_timeDiff > 0) {
                         Navigator.of(context).pop();
                         _confirmSave();
                       }
@@ -308,7 +306,12 @@ class _MyHomePageState extends State<MyHomePage> {
               FlatButton(
                 textColor: Color(0xFF6200EE),
                 onPressed: () {
-                  _saveToEvents();
+                  _saveToEvents([
+                    _timeDiff,
+                    _timeDiffHour,
+                    _timeDiffMinute,
+                    _currentSelectedDay.toString()
+                  ]);
                   Navigator.of(context).pop();
                 },
                 child: Text('YES'),
@@ -318,15 +321,73 @@ class _MyHomePageState extends State<MyHomePage> {
         });
   }
 
-  void _saveToEvents() {
-    print("CALLBACK: _saveToEvents KEY:"+_currentSelectedDay.toString()+' EVENT_KEY'+_events[_currentSelectedDay].toString()+' ALL_EVENT:'+_events.toString());
-    setState(() {
-      _events.update(_currentSelectedDay,
-              (value) => value + [[_timeDiff, _timeDiffHour, _timeDiffMinute]],
+  _getEvents() async {
+    db = await DBHelper.instance.database;
+    final records = await db.query(DBHelper.table);
+    Map<DateTime, List> events = {};
+    records.forEach((record) {
+      events.update(
+          DateTime.parse(record[DBHelper.columnDay]),
+          (value) =>
+              value +
+              [
+                [
+                  record[DBHelper.columnTime],
+                  (record[DBHelper.columnHour]).truncate(),
+                  (record[DBHelper.columnMinute]).truncate(),
+                  record[DBHelper.columnId],
+                ]
+              ],
           ifAbsent: () => [
-            [_timeDiff, _timeDiffHour, _timeDiffMinute]
-          ]);
+                [
+                  record[DBHelper.columnTime],
+                  (record[DBHelper.columnHour]).truncate(),
+                  (record[DBHelper.columnMinute]).truncate(),
+                  record[DBHelper.columnId],
+                ]
+              ]);
     });
+
+    setState(() {
+      _events = events;
+      _selectedEvents = _events[_currentSelectedDay] ?? [];
+    });
+    print("DATABASE CALLBACK: Events() events:\n" + events.toString() +'\n'+_selectedEvents.toString());
+  }
+
+  _saveToEvents(List<dynamic> record) async {
+    // row to insert
+    Map<String, dynamic> row = {
+      DBHelper.columnDay: record[3],
+      DBHelper.columnTime: record[0],
+      DBHelper.columnHour: record[1],
+      DBHelper.columnMinute: record[2],
+    };
+
+    int id = await db.insert(DBHelper.table, row);
+
+    print("CALLBACK: _saveToEvents id: " + id.toString());
+    setState(() {
+      //todo
+      _events.update(
+          _currentSelectedDay,
+          (value) =>
+              value +
+              [
+                [_timeDiff, _timeDiffHour, _timeDiffMinute, id]
+              ],
+          ifAbsent: () => [
+                [_timeDiff, _timeDiffHour, _timeDiffMinute, id]
+              ]);
+      _selectedEvents = _events[_currentSelectedDay] ?? [];
+    });
+
+    print(await db.query(DBHelper.table));
+  }
+
+  _deleteEvent(int id) async {
+    await db.delete(DBHelper.table, where: "${DBHelper.columnId} = ?", whereArgs: [id]);
+    _getEvents();
   }
 
   Widget _buildTableCalendar() {
@@ -334,8 +395,7 @@ class _MyHomePageState extends State<MyHomePage> {
       calendarController: _calendarController,
       events: _events,
       calendarStyle: CalendarStyle(
-        markersColor: Colors.red[300],
-        outsideDaysVisible: false,
+        markersColor: Colors.yellow[600],
       ),
       onDaySelected: _onDaySelected,
       onVisibleDaysChanged: _onVisibleDaysChanged,
@@ -353,8 +413,39 @@ class _MyHomePageState extends State<MyHomePage> {
                 margin:
                     const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
                 child: ListTile(
-                  title: Text('${event[1]>0?"${event[1]} hours ":""}${event[2]>0?"${event[2]} minutes ":""}\tWages: $_currency ${(event[0]*_payRate).toStringAsFixed(2)}'),
-                  onTap: () => print('$event tapped!'),
+                  title: Text(
+                    '${event[1] > 0 ? "${event[1]} hours " : ""}${event[2] > 0 ? "${event[2]} minutes " : ""}\tWages: $_currency ${(event[0] * _payRate).toStringAsFixed(2)}',
+                  ),
+                  onLongPress: () => {
+                    showDialog(
+                        context: context,
+                        builder: (BuildContext context) {
+                          return AlertDialog(
+                            title: Text('Are you sure?'),
+                            content: Text(
+                                'Do you sure you want to delete this record?'),
+                            actions: [
+                              FlatButton(
+                                onPressed: () {
+                                  Navigator.of(context).pop();
+                                },
+                                child: Text('NO'),
+                              ),
+                              RaisedButton(
+                                color: Colors.redAccent,
+                                elevation: 0.0,
+                                onPressed: () {
+                                  //todo deletion
+                                  print("Having id= "+event[3].toString());
+                                  _deleteEvent(event[3]);
+                                  Navigator.of(context).pop();
+                                },
+                                child: Text('YES'),
+                              ),
+                            ],
+                          );
+                        })
+                  },
                 ),
               ))
           .toList(),
@@ -375,15 +466,19 @@ class _MyHomePageState extends State<MyHomePage> {
           children: <Widget>[
             _buildTableCalendar(),
             Container(
-              child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: <Widget>[
-                    Text("You've earned: "+_currency+' '+_calculateWages(_currentSelectedDay).toStringAsFixed(2)+" today!"),
-                    SizedBox(height: 5.0),
-                    Text("This week's earning: "+_currency+' '+_getWeeklySalary(_currentSelectedDay).toStringAsFixed(2)),
-                    SizedBox(height: 5.0),
-                  ]
-              ),
+              child: Column(mainAxisSize: MainAxisSize.min, children: <Widget>[
+                Text("You've earned: " +
+                    _currency +
+                    ' ' +
+                    _calculateWages(_currentSelectedDay).toStringAsFixed(2) +
+                    " today!"),
+                SizedBox(height: 5.0),
+                Text("This week's earning: " +
+                    _currency +
+                    ' ' +
+                    _getWeeklySalary(_currentSelectedDay).toStringAsFixed(2)),
+                SizedBox(height: 5.0),
+              ]),
             ),
             Expanded(child: _buildEventList()),
           ],
@@ -412,7 +507,10 @@ class _MyHomePageState extends State<MyHomePage> {
                     ),
                   ),
                   Text(
-                    'Pay Rate: ' + _currency + " " + _payRate.toStringAsFixed(2),
+                    'Pay Rate: ' +
+                        _currency +
+                        " " +
+                        _payRate.toStringAsFixed(2),
                     style: TextStyle(
                       color: Colors.white,
                       fontSize: 12,
@@ -428,7 +526,7 @@ class _MyHomePageState extends State<MyHomePage> {
             ListTile(
               title: Text('Change Pay Rate'),
               onTap: () {
-                _payRateController.text = _payRate.toString();
+                _payRateController.text = _payRate.toStringAsFixed(2);
                 showDialog(
                     context: context,
                     builder: (BuildContext context) {
@@ -464,6 +562,7 @@ class _MyHomePageState extends State<MyHomePage> {
                               setState(() {
                                 _payRate =
                                     double.parse(_payRateController.text);
+                                // db.update(DBHelper.table2, {DBHelper.columnPayRate:_payRate}, where: '${DBHelper.columnUserId}=?',whereArgs: _userDetail[DBHelper.columnUserId]);
                                 Navigator.pop(context);
                               });
                             },
@@ -512,6 +611,7 @@ class _MyHomePageState extends State<MyHomePage> {
                             onPressed: () {
                               setState(() {
                                 _currency = _currencyController.text;
+                                // db.update(DBHelper.table2, {DBHelper.columnCurrency:_currency}, where: '${DBHelper.columnUserId}=?',whereArgs: _userDetail[DBHelper.columnUserId]);
                                 Navigator.pop(context);
                               });
                             },
