@@ -625,7 +625,15 @@ class _MyHomePageState extends State<MyHomePage> {
             ListTile(
               title: Text('About'),
               onTap: () {
-                Navigator.pop(context);
+                showDialog(
+                    context: context,
+                    builder: (BuildContext context) {
+                      return AlertDialog(
+                        title: Text('Hi There!'),
+                        content: Text(
+                            'This app is made by Tennor (Kang Ning Lee), inspired by his girlfriend since both of them are working as a part timer and dont wanna be scammed by thier boss lol.'),
+                      );
+                    });
               },
             ),
           ],
